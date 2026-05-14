@@ -1,28 +1,5 @@
-# -*- coding: utf-8 -*-
-"""
-Chest X-Ray Pneumonia Detection
-================================
-ResNet18 fine-tuned on the Kaggle chest-xray-pneumonia dataset.
+# Chest X-Ray Pneumonia Detection
 
-Improvements over original:
-  - Better data split: merge all images → stratified 85/0.85/14
-  - Partial fine-tuning: unfreeze ResNet layer4 + fc
-  - Improved head: Linear → BN → ReLU → Dropout → Linear → BN → ReLU → Dropout → Linear
-  - Label smoothing loss (reduces over-confidence)
-  - CosineAnnealingLR scheduler (smoother LR decay)
-  - Test-Time Augmentation (TTA) for higher test accuracy
-  - Weighted sampler to handle class imbalance
-  - Clean modular structure
-"""
-
-# ─────────────────────────────────────────
-# 0. INSTALL  (Colab / fresh environment)
-# ─────────────────────────────────────────
-# !pip install kagglehub fastapi uvicorn python-multipart torch torchvision scikit-learn matplotlib seaborn Pillow streamlit --quiet
-
-# ─────────────────────────────────────────
-# 1. IMPORTS
-# ─────────────────────────────────────────
 import os
 import random
 import io
@@ -49,11 +26,9 @@ from sklearn.metrics import (
 
 import kagglehub
 
-# ─────────────────────────────────────────
 # 2. CONFIG  (change only here)
-# ─────────────────────────────────────────
 SEED        = 42
-BATCH_SIZE  = 16  # reduced for 4GB VRAM
+BATCH_SIZE  = 32
 EPOCHS      = 15
 LR          = 3e-4
 PATIENCE    = 5
@@ -74,9 +49,9 @@ torch.manual_seed(SEED)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
-# ─────────────────────────────────────────
+
 # 3. DOWNLOAD DATASET
-# ─────────────────────────────────────────
+
 dataset_path = kagglehub.dataset_download("paultimothymooney/chest-xray-pneumonia")
 
 train_dir = os.path.join(dataset_path, "chest_xray", "train")
@@ -84,12 +59,12 @@ val_dir   = os.path.join(dataset_path, "chest_xray", "val")
 test_dir  = os.path.join(dataset_path, "chest_xray", "test")
 
 for p in [train_dir, val_dir, test_dir]:
-    status = "✅" if os.path.exists(p) else "❌"
+    status = "True" if os.path.exists(p) else "False"
     print(f"{status} {p}")
 
-# ─────────────────────────────────────────
+
 # 4. DATASET VISUALIZATION
-# ─────────────────────────────────────────
+
 raw_dataset = datasets.ImageFolder(train_dir)
 
 fig, axes = plt.subplots(4, 6, figsize=(16, 10))
@@ -105,11 +80,8 @@ plt.suptitle("Sample X-Ray Images", fontsize=14)
 plt.tight_layout()
 plt.show()
 
-# ─────────────────────────────────────────
 # 5. EXPLORATORY ANALYSIS
-# ─────────────────────────────────────────
 
-# --- 5a. Class distribution ---
 counts = [0, 0]
 for _, label in raw_dataset:
     counts[label] += 1
@@ -125,7 +97,6 @@ plt.ylabel("Count")
 plt.show()
 print("Classes:", CLASSES, "| Counts:", counts)
 
-# --- 5b. Image size distribution ---
 widths, heights = [], []
 for img_path, _ in raw_dataset.samples:
     w, h = Image.open(img_path).size
@@ -145,7 +116,6 @@ plt.show()
 print(f"Width  → min: {min(widths)}, max: {max(widths)}")
 print(f"Height → min: {min(heights)}, max: {max(heights)}")
 
-# --- 5c. Pixel intensity distribution ---
 all_pixels = []
 for i in random.sample(range(len(raw_dataset)), 120):
     img, _ = raw_dataset[i]
@@ -160,13 +130,12 @@ plt.ylabel("Frequency")
 plt.grid(axis="y", alpha=0.3)
 plt.show()
 
-# ─────────────────────────────────────────
 # 6. TRANSFORMS
-# ─────────────────────────────────────────
+
 MEAN = [0.485, 0.456, 0.406]
 STD  = [0.229, 0.224, 0.225]
 
-# Training: aggressive augmentation
+
 train_transform = transforms.Compose([
     transforms.Grayscale(num_output_channels=3),
     transforms.Resize((IMG_SIZE + 20, IMG_SIZE + 20)),
@@ -179,7 +148,6 @@ train_transform = transforms.Compose([
     transforms.Normalize(mean=MEAN, std=STD),
 ])
 
-# Evaluation: deterministic
 test_transform = transforms.Compose([
     transforms.Grayscale(num_output_channels=3),
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -187,7 +155,6 @@ test_transform = transforms.Compose([
     transforms.Normalize(mean=MEAN, std=STD),
 ])
 
-# TTA transform: light augmentation at inference
 tta_transform = transforms.Compose([
     transforms.Grayscale(num_output_channels=3),
     transforms.Resize((IMG_SIZE + 10, IMG_SIZE + 10)),
@@ -197,11 +164,8 @@ tta_transform = transforms.Compose([
     transforms.Normalize(mean=MEAN, std=STD),
 ])
 
-# ─────────────────────────────────────────
-# 7. DATASET SPLIT  (85 / 0.85 / 14 %)
-#    Merge all original splits → re-split
-#    so val is meaningful (58 images vs 16)
-# ─────────────────────────────────────────
+# 7. DATASET SPLIT
+
 ds_train = datasets.ImageFolder(train_dir, transform=train_transform)
 ds_val   = datasets.ImageFolder(val_dir,   transform=test_transform)
 ds_test  = datasets.ImageFolder(test_dir,  transform=test_transform)
@@ -225,14 +189,12 @@ print(f"Train        : {len(train_dataset)}")
 print(f"Validation   : {len(val_dataset)}")
 print(f"Test         : {len(test_dataset)}")
 
-# ─────────────────────────────────────────
 # 8. WEIGHTED SAMPLER  (handle imbalance)
-# ─────────────────────────────────────────
+
 def get_labels(subset: Subset) -> list:
     """Extract labels from a Subset (works with ConcatDataset inside)."""
     labels = []
     for idx in subset.indices:
-        # ConcatDataset: find which sub-dataset and local index
         cumulative = 0
         for ds in subset.dataset.datasets:
             if idx < cumulative + len(ds):
@@ -251,9 +213,8 @@ sampler      = WeightedRandomSampler(sample_w, len(sample_w))
 
 print(f"\nClass counts in train → NORMAL: {class_count[0]}, PNEUMONIA: {class_count[1]}")
 
-# ─────────────────────────────────────────
 # 9. DATALOADERS
-# ─────────────────────────────────────────
+
 train_loader = DataLoader(
     train_dataset, batch_size=BATCH_SIZE,
     sampler=sampler, num_workers=2, pin_memory=True
@@ -266,29 +227,21 @@ test_loader = DataLoader(
     test_dataset, batch_size=BATCH_SIZE,
     shuffle=False, num_workers=2, pin_memory=True
 )
-print("Dataloaders ready ✅")
+print("Dataloaders is ready.")
 
-# ─────────────────────────────────────────
 # 10. MODEL  (ResNet18 — partial fine-tune)
-# ─────────────────────────────────────────
+
 def build_model(device: torch.device) -> nn.Module:
-    """
-    ResNet18 with:
-      - All layers frozen except layer4 + fc
-      - Improved head: BN → dropout for better generalisation
-    """
+    
     model = models.resnet18(weights="DEFAULT")
 
-    # Freeze everything first
     for param in model.parameters():
         param.requires_grad = False
-
-    # Unfreeze layer4 (last residual block) for fine-tuning
+      
     for param in model.layer4.parameters():
         param.requires_grad = True
 
-    # Replace the classifier head
-    num_features = model.fc.in_features       # 512 for ResNet18
+    num_features = model.fc.in_features     
     model.fc = nn.Sequential(
         nn.Linear(num_features, 256),
         nn.BatchNorm1d(256),
@@ -312,34 +265,29 @@ trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
 total     = sum(p.numel() for p in model.parameters())
 print(f"\nTrainable params : {trainable:,} / {total:,} ({100*trainable/total:.1f}%)")
 
-# ─────────────────────────────────────────
 # 11. LOSS, OPTIMIZER, SCHEDULER
-# ─────────────────────────────────────────
-# Label smoothing reduces over-confidence → better calibration
+
 criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-# Optimise only trainable params (layer4 + fc) with different LRs
 optimizer = optim.AdamW([
-    {"params": model.layer4.parameters(), "lr": LR * 0.1},   # slower for pre-trained
-    {"params": model.fc.parameters(),     "lr": LR},          # faster for new head
+    {"params": model.layer4.parameters(), "lr": LR * 0.1},   
+    {"params": model.fc.parameters(),     "lr": LR},          
 ], weight_decay=1e-4)
 
-# Cosine annealing: smooth LR decay, no manual tuning needed
 scheduler = optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=EPOCHS, eta_min=1e-6
 )
 
-print("Optimizer + Scheduler ready ✅")
+print("Optimizer & Scheduler are ready.")
 
-# ─────────────────────────────────────────
 # 12. TRAINING LOOP
-# ─────────────────────────────────────────
+
 best_val_acc = 0.0
 patience_counter = 0
 train_losses, val_accs = [], []
 
 for epoch in range(1, EPOCHS + 1):
-    # ── Train ──
+    #Train
     model.train()
     running_loss = 0.0
 
@@ -354,7 +302,7 @@ for epoch in range(1, EPOCHS + 1):
     train_loss = running_loss / len(train_loader)
     train_losses.append(train_loss)
 
-    # ── Validate ──
+    #Validate
     model.eval()
     correct = total = 0
 
@@ -375,23 +323,22 @@ for epoch in range(1, EPOCHS + 1):
           f"Val Acc: {val_acc:.2f}% │ "
           f"LR: {current_lr:.2e}")
 
-    # ── Checkpoint ──
+    #Checkpoint
     if val_acc > best_val_acc:
         best_val_acc = val_acc
         torch.save(model.state_dict(), SAVE_PATH)
-        print(f"  ✅ Best model saved  ({best_val_acc:.2f}%)")
+        print(f"  Best model saved  ({best_val_acc:.2f}%)")
         patience_counter = 0
     else:
         patience_counter += 1
         if patience_counter >= PATIENCE:
-            print("  ⏹  Early stopping triggered.")
+            print("Early stopping triggered.")
             break
 
 print(f"\nBest validation accuracy: {best_val_acc:.2f}%")
 
-# ─────────────────────────────────────────
 # 13. TRAINING CURVES
-# ─────────────────────────────────────────
+
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
 axes[0].plot(train_losses, marker="o", color="steelblue")
@@ -409,9 +356,8 @@ axes[1].grid(alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# ─────────────────────────────────────────
 # 14. TEST EVALUATION  (standard)
-# ─────────────────────────────────────────
+
 model.load_state_dict(torch.load(SAVE_PATH, map_location=device))
 model.eval()
 
@@ -431,10 +377,8 @@ with torch.no_grad():
 print("\n── Standard Test Evaluation ──")
 print(classification_report(all_labels, all_preds, target_names=CLASSES))
 
-# ─────────────────────────────────────────
 # 15. TEST-TIME AUGMENTATION (TTA)
-# ─────────────────────────────────────────
-# Re-create test_dataset with TTA transform then average TTA_STEPS passes
+
 tta_dataset = Subset(
     ConcatDataset([
         datasets.ImageFolder(train_dir, transform=tta_transform),
@@ -469,9 +413,8 @@ tta_preds = (tta_probs >= 0.5).astype(int)
 print(f"\n── TTA Evaluation ({TTA_STEPS} passes) ──")
 print(classification_report(tta_labels, tta_preds, target_names=CLASSES))
 
-# ─────────────────────────────────────────
 # 16. CONFUSION MATRIX
-# ─────────────────────────────────────────
+
 cm = confusion_matrix(tta_labels, tta_preds)
 
 plt.figure(figsize=(6, 5))
@@ -482,9 +425,8 @@ plt.ylabel("Actual")
 plt.title("Confusion Matrix (TTA)")
 plt.show()
 
-# ─────────────────────────────────────────
 # 17. ROC CURVE
-# ─────────────────────────────────────────
+
 auc = roc_auc_score(tta_labels, tta_probs)
 fpr, tpr, _ = roc_curve(tta_labels, tta_probs)
 
@@ -499,9 +441,8 @@ plt.grid(alpha=0.3)
 plt.show()
 print(f"ROC-AUC: {auc:.4f}")
 
-# ─────────────────────────────────────────
 # 18. MISCLASSIFICATION ANALYSIS
-# ─────────────────────────────────────────
+
 model.eval()
 misclassified_imgs, true_lbls, pred_lbls = [], [], []
 
@@ -531,9 +472,8 @@ if misclassified_imgs:
     plt.tight_layout()
     plt.show()
 
-# ─────────────────────────────────────────
 # 19. EXAMPLE PREDICTIONS
-# ─────────────────────────────────────────
+
 model.eval()
 fig, axes = plt.subplots(2, 5, figsize=(16, 7))
 
@@ -560,7 +500,7 @@ plt.suptitle("Example Predictions  (green=correct, red=wrong)", fontsize=12)
 plt.tight_layout()
 plt.show()
 
-print("\n✅ Training & Evaluation complete.")
+print("\n Training & Evaluation complete.")
 print(f"   Best val acc : {best_val_acc:.2f}%")
 print(f"   ROC-AUC (TTA): {auc:.4f}")
 print(f"   Model saved to: {SAVE_PATH}")

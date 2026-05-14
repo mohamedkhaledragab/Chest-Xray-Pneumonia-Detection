@@ -1,0 +1,46 @@
+services:
+
+  model-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.trainer
+    volumes:
+      - models:/app/models
+    environment:
+      - MODEL_PATH=/app/models/xray_classifier.pth
+      - NVIDIA_VISIBLE_DEVICES=all
+    runtime: nvidia
+
+  inference-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - models:/app/models
+    environment:
+      - MODEL_PATH=/app/models/xray_classifier.pth
+    depends_on:
+      model-trainer:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://inference-api:8000
+    depends_on:
+      inference-api:
+        condition: service_healthy
+
+volumes:
+  models:

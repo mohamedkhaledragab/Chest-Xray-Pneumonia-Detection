@@ -1,8 +1,4 @@
-"""
-Pneumonia Detection API
-========================
-Run:  uvicorn app:app --host 0.0.0.0 --port 8000
-"""
+# Pneumonia Detection API
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
@@ -12,7 +8,7 @@ import torch.nn as nn
 from torchvision import transforms, models
 import io
 
-# ── Config ──────────────────────────────────────────────────────────
+# Configrations
 import os
 
 CLASSES    = ["NORMAL", "PNEUMONIA"]
@@ -20,11 +16,11 @@ MODEL_PATH = os.getenv("MODEL_PATH", "xray_classifier.pth")
 IMG_SIZE   = 224
 MEAN       = [0.485, 0.456, 0.406]
 STD        = [0.229, 0.224, 0.225]
-TTA_STEPS  = 5   # set to 1 to disable TTA (faster, slightly lower accuracy)
+TTA_STEPS  = 5   
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ── Build model (must match training architecture) ───────────────────
+# Build model 
 def build_model() -> nn.Module:
     model = models.resnet18(weights=None)
     for param in model.parameters():
@@ -48,7 +44,7 @@ model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.to(device)
 model.eval()
 
-# ── Transforms ──────────────────────────────────────────────────────
+# Transforms
 base_transform = transforms.Compose([
     transforms.Grayscale(num_output_channels=3),
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -65,7 +61,7 @@ tta_transform = transforms.Compose([
     transforms.Normalize(mean=MEAN, std=STD),
 ])
 
-# ── FastAPI ──────────────────────────────────────────────────────────
+# FastAPI
 app = FastAPI(
     title="Chest X-Ray Pneumonia Detection API",
     description="Upload a chest X-Ray image and get NORMAL / PNEUMONIA prediction.",
@@ -90,14 +86,11 @@ async def predict(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Could not open image.")
 
-    # TTA: average TTA_STEPS passes
     prob_sum = 0.0
     with torch.no_grad():
-        # First pass: deterministic
         t = base_transform(pil_img).unsqueeze(0).to(device)
         prob_sum += torch.softmax(model(t), dim=1)[0, 1].item()
 
-        # Remaining passes: augmented
         for _ in range(TTA_STEPS - 1):
             t = tta_transform(pil_img).unsqueeze(0).to(device)
             prob_sum += torch.softmax(model(t), dim=1)[0, 1].item()

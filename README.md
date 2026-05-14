@@ -43,7 +43,7 @@ chest_xray_pneumonia_detection/
 
 ## Quick start
 
-### ▶ Option A — Docker Compose (recommended)
+## Docker Compose (recommended)
 
 ```bash
 # Train + launch all services in one command
@@ -61,20 +61,6 @@ docker compose up inference-api ui
 | `ui` | http://localhost:8501 | Streamlit web interface |
 | `model-trainer` | — | Runs once, saves weights to shared volume |
 
-### ▶ Option B — Local (no Docker)
-
-```bash
-pip install -r requirements.txt
-python chest_xray_pneumonia.py        # train → saves xray_classifier.pth
-uvicorn api.app:app --port 8000       # API
-streamlit run ui/streamlit_app.py     # UI
-```
-
-### ▶ Option C — Colab
-
-Open `chest_xray_pneumonia_colab.ipynb` in Google Colab with a T4 GPU.
-
----
 
 ## Key improvements over original
 
@@ -117,4 +103,4 @@ Open `chest_xray_pneumonia_colab.ipynb` in Google Colab with a T4 GPU.
 - Total images: ~5,856
 - Split used: Train 4,936 · Val 58 · Test 862
 
-> **Disclaimer:** This model is for research and educational purposes only. It is not a certified medical device and should not be used for clinical diagnosis.
+> Disclaimer: This model is for research and educational purposes only. It is not a certified medical device and should not be used for clinical diagnosis.
